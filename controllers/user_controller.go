@@ -6,7 +6,7 @@ import (
 	"fiber-mongo-api/configs"
 	"fiber-mongo-api/models"
 	"fiber-mongo-api/responses"
-	"fiber-mongo-api/services"
+
 	"fmt"
 	"log"
 	"net/http"
@@ -77,7 +77,7 @@ func Register(c *fiber.Ctx) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	var user models.User
 	defer cancel()
-
+	// user := new(user)
 	//validate the request body
 	if err := c.BodyParser(&user); err != nil {
 		return c.Status(http.StatusBadRequest).JSON(responses.UserResponse{Status: http.StatusBadRequest, Message: "error", Data: &fiber.Map{"data": err.Error()}})
@@ -92,10 +92,19 @@ func Register(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"status": "error", "message": "Couldn't hash password", "data": err})
 
 	}
-	createdRecord := userCollection.FindOne(ctx, bson.M{"email": user.Email}).Decode(&user)
+	// createdRecord := userCollection.FindOne(ctx, bson.M{"email": user.Email}).Decode(&user)
 	// fmt.Println(user.Email)
-	if createdRecord == nil {
-		return c.Status(400).JSON(fiber.Map{"message": "User ALready Exist"})
+	filterCursor, err := userCollection.Find(c.Context(), bson.M{"email": user.Email})
+	if err != nil {
+		log.Fatal(err)
+	}
+	var userEmail []bson.M
+	if err = filterCursor.All(c.Context(), &userEmail); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(userEmail)
+	if userEmail != nil {
+		return c.Status(400).JSON(fiber.Map{"message": "User Already Exist"})
 	}
 	user.Password = hash
 	newUser := models.User{
@@ -107,7 +116,16 @@ func Register(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(http.StatusInternalServerError).JSON(responses.UserResponse{Status: http.StatusInternalServerError, Message: "error", Data: &fiber.Map{"data": err.Error()}})
 	}
-	return c.Status(http.StatusCreated).JSON(responses.UserResponse{Status: http.StatusCreated, Message: "success", Data: &fiber.Map{"data": result}})
+	filter := bson.D{{Key: "_id", Value: result.InsertedID}}
+	createdRecord := userCollection.FindOne(c.Context(), filter)
+
+	// decode the Mongo record into Employee
+	createdUser := &models.User{}
+	createdRecord.Decode(createdUser)
+
+	// return the created Employee in JSON format
+	// return c.Status(201).JSON(createdUser)
+	return c.Status(http.StatusCreated).JSON(responses.UserResponse{Status: http.StatusCreated, Message: "success", Data: &fiber.Map{"data": createdUser}})
 
 	// filter := bson.D{{key: "_id", value: result.InsertedID}}
 	// value := result.InsertedID
@@ -129,16 +147,33 @@ func Login(c *fiber.Ctx) error {
 	// var result bson.D
 	// filter := bson.D{{"email", input.Email}}
 	// err := userCollection.FindOne(ctx, filter).Decode(&result)
-	exist := userCollection.FindOne(ctx, bson.M{"email": input.Email}).Decode(&user)
-	fmt.Println(exist)
-	fmt.Println(user.Email)
-	// fmt.Println(result)
-	if exist != nil {
-		log.Printf("%s signin failed: %v\n", input.Email, err.Error())
-		return c.
-			Status(http.StatusUnauthorized).SendString("Unauthorized")
+	// exist := userCollection.FindOne(ctx, bson.M{"email": input.Email}).Decode(&user)
+	// fmt.Println(exist)
+	// fmt.Println(user.Email)
+	filterCursor, err := userCollection.Find(c.Context(), bson.M{"email": input.Email})
+	if err != nil {
+		log.Fatal(err)
 	}
-	err = VerifyPassword(user.Password, input.Password)
+	fmt.Println(filterCursor)
+	var exist []bson.M
+	if err = filterCursor.All(ctx, &exist); err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(exist)
+	// if exist == nil {
+	// 	return c.Status(400).JSON(fiber.Map{"message": "User Already Exist"})
+	// }
+	// fmt.Println(result)
+
+	if exist == nil {
+		// log.Printf("%s signin failed: %v\n", input.Email, err.Error())
+		return c.Status(http.StatusUnauthorized).SendString("Unauthorized")
+	}
+	out := exist[0]
+	userPassword := out["password"].(string)
+
+	fmt.Println(userPassword)
+	err = VerifyPassword(userPassword, input.Password)
 	if err != nil {
 		log.Printf("%s signin failed: %v\n", input.Email, err.Error())
 		return c.
@@ -153,40 +188,7 @@ func Login(c *fiber.Ctx) error {
 	return c.
 		Status(http.StatusOK).
 		JSON(fiber.Map{
-			"user":  user,
+			"user":  out,
 			"token": fmt.Sprintf("Bearer %s", token),
 		})
-}
-
-func Signup(c *fiber.Ctx) error {
-	// ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	var user models.User
-	// defer cancel()
-	err := c.BodyParser(&user)
-	if err != nil {
-		c.Status(fiber.StatusBadGateway).JSON(fiber.Map{
-			"error": err.Error(),
-		})
-	}
-	// hash, err := hashPassword(user.Password)
-	if err != nil {
-		return c.Status(500).JSON(fiber.Map{"status": "error", "message": "Couldn't hash password", "data": err})
-
-	}
-	email := user.Email
-	exist, err = services.Getemail(email)
-	fmt.Println(user)
-	if err != nil {
-		log.Fatal(err)
-		return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{
-			"error": err.Error(),
-		})
-	}
-	if exist != nil {
-		return c.Status(400).JSON(fiber.Map{"message": "User ALready Exist"})
-	}
-
-	user, _ = services.Postuser(user)
-	return c.Status(fiber.StatusOK).JSON(user)
-
 }
